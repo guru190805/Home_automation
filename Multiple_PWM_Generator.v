@@ -15,7 +15,7 @@ module ShiftReg(
         Q = 8'b0;
     end
 
-    always @(posedge clk or posedge reset) begin
+    always @(posedge clk ) begin
         if (reset) begin
             shift_reg <= 8'b0;
             Q <= 8'b0;
