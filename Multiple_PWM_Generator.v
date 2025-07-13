@@ -1,134 +1,149 @@
 `timescale 1ns/1ps
 
-// Shift Register Module
-module ShiftReg(
-    input wire clk,   
-    input wire latch,   
-    input wire reset,   
-    input wire S_in,   
-    output reg [7:0] Q
+module pwm_generator(
+    input wire clk,            
+    input wire rst,            
+    input wire [6:0] duty_in,      // Input to set duty cycle (0-99)
+    input wire [2:0] channel_sel,  // Select which channel to configure (0-7)
+    input wire load_duty,          // Signal to load new duty cycle
+    input wire [7:0] enable_pwm,   // Enable individual PWM channels
+    output reg [7:0] pwm_out  
 );
-    reg [7:0] shift_reg;
 
-    initial begin
-        shift_reg = 8'b0;
-        Q = 8'b0;
-    end
-
-    always @(posedge clk ) begin
-        if (reset) begin
-            shift_reg <= 8'b0;
-            Q <= 8'b0;
-        end else begin
-            shift_reg <= {shift_reg[6:0], S_in};
-            if(latch)
-                Q <= shift_reg;
-        end
-    end
-endmodule
-
-// PWM Generator Module
-module PWM_Gen(
-    input wire clk,    
-    output wire [7:0] pwm
-);
-    localparam COUNTER_MAX = 99;
+    // Counter
+    reg [6:0] count;  
+    reg [6:0] duty_cycles [0:7];  // Array to store duty cycles
     
-    localparam DUTY_0 = 7'd10;
-    localparam DUTY_1 = 7'd20;
-    localparam DUTY_2 = 7'd30;
-    localparam DUTY_3 = 7'd40;
-    localparam DUTY_4 = 7'd50;
-    localparam DUTY_5 = 7'd60;
-    localparam DUTY_6 = 7'd70;
-    localparam DUTY_7 = 7'd80;
+    // Define maximum count
+    localparam [6:0] MAX_COUNT = 7'd99;
 
-    reg [6:0] counter;
-    reg [2:0] i;
-    reg S_in;
-    reg latch;
-
-    // Initialize registers
-    initial begin
-        counter = 0;
-        i = 0;
-        S_in = 0;
-        latch = 0;
-    end
+    integer i;  // For initialization
 
     // Counter logic
-    always @(posedge clk) begin
-        if(counter >= COUNTER_MAX)
-            counter <= 0;
-        else
-            counter <= counter + 1;
+    always @(posedge clk or posedge rst) begin
+        if (rst) begin
+            count <= 7'd0;
+            // Initialize all duty cycles to 0
+            for (i = 0; i < 8; i = i + 1) begin
+                duty_cycles[i] <= 7'd0;
+            end
+        end else begin
+            // Load new duty cycle when requested
+            if (load_duty) begin
+                duty_cycles[channel_sel] <= duty_in;
+            end
+            // Counter logic
+            count <= (count == MAX_COUNT) ? 7'd0 : count + 7'd1;
+        end
     end
 
-    // PWM and shift register control logic
-    always @(posedge clk) begin
-        // Generate PWM signal based on counter and duty cycle
-        case(i)
-            3'd0: S_in <= (counter < DUTY_0);
-            3'd1: S_in <= (counter < DUTY_1);
-            3'd2: S_in <= (counter < DUTY_2);
-            3'd3: S_in <= (counter < DUTY_3);
-            3'd4: S_in <= (counter < DUTY_4);
-            3'd5: S_in <= (counter < DUTY_5);
-            3'd6: S_in <= (counter < DUTY_6);
-            3'd7: S_in <= (counter < DUTY_7);
-        endcase
-        
-        // Update channel counter and latch signal
-        if(i == 3'b111)
-            i <= 0;
-        else
-            i <= i + 1;
-            
-        latch <= (i == 3'b111);
+    // PWM generation logic
+    always @(posedge clk or posedge rst) begin
+        if (rst) begin
+            pwm_out <= 8'h00;  // All outputs low on reset
+        end else begin
+            for (i = 0; i < 8; i = i + 1) begin
+                if (enable_pwm[i]) begin  // Only generate PWM if channel is enabled
+                    if (count == 7'd0)
+                        pwm_out[i] <= 1'b1;
+                    else
+                        pwm_out[i] <= (count < duty_cycles[i]);
+                end else begin
+                    pwm_out[i] <= 1'b0;  // Disabled channels stay low
+                end
+            end
+        end
     end
 
-    ShiftReg Shft (
-        .clk(clk),    
-        .latch(latch),    
-        .reset(1'b0),  
-        .S_in(S_in),    
-        .Q(pwm)
-    );
 endmodule
 
-// Testbench Module
-module PWM_Gen_tb;
+// Testbench
+module pwm_generator_tb;
     reg clk;
-    wire [7:0] pwm;
+    reg rst;
+    reg [6:0] duty_in;
+    reg [2:0] channel_sel;
+    reg load_duty;
+    reg [7:0] enable_pwm;
+    wire [7:0] pwm_out;
     
-    // Instantiate the PWM Generator
-    PWM_Gen uut (
-        .clk(clk),  
-        .pwm(pwm)
+    // Local parameters for testbench
+    localparam CLK_PERIOD = 10;
+    
+    // Instantiate PWM generator
+    pwm_generator uut (
+        .clk(clk),
+        .rst(rst),
+        .duty_in(duty_in),
+        .channel_sel(channel_sel),
+        .load_duty(load_duty),
+        .enable_pwm(enable_pwm),
+        .pwm_out(pwm_out)
     );
     
-    // Clock generation - 100MHz
+    // Clock generation
     initial begin
         clk = 0;
-        forever #5 clk = ~clk;
+        forever #(CLK_PERIOD/2) clk = ~clk;
     end
     
-    // Stimulus and monitoring
+    // Test stimulus
     initial begin
-        // Enable waveform dumping
-        $dumpfile("pwm_test.vcd");
-        $dumpvars(0, PWM_Gen_tb);
+        // Initialize waveform dump
+        $dumpfile("pwm_waves.vcd");
+        $dumpvars(0, pwm_generator_tb);
+        
+        // Initial values
+        rst = 1;
+        duty_in = 0;
+        channel_sel = 0;
+        load_duty = 0;
+        enable_pwm = 8'h00;
+        
+        // Release reset
+        #(CLK_PERIOD*2);
+        rst = 0;
+        
+        // Configure and enable specific channels
+        // Channel 0 - 20% duty cycle
+        #(CLK_PERIOD);
+        channel_sel = 0;
+        duty_in = 20;
+        load_duty = 1;
+        #(CLK_PERIOD);
+        load_duty = 0;
+        
+        // Channel 2 - 40% duty cycle
+        #(CLK_PERIOD);
+        channel_sel = 2;
+        duty_in = 40;
+        load_duty = 1;
+        #(CLK_PERIOD);
+        load_duty = 0;
+        
+        // Channel 5 - 60% duty cycle
+        #(CLK_PERIOD);
+        channel_sel = 5;
+        duty_in = 60;
+        load_duty = 1;
+        #(CLK_PERIOD);
+        load_duty = 0;
+        
+        // Enable only configured channels
+        #(CLK_PERIOD);
+        enable_pwm = 8'b00100101;  // Enable channels 0, 2, and 5
         
         // Run for multiple PWM cycles
-        #10000;  // Run for longer to see multiple PWM cycles
+        #(CLK_PERIOD*1000);
         
+        $display("Simulation completed");
         $finish;
     end
     
-    // Monitor signals every 100ns
+    // Monitor PWM outputs
     always @(posedge clk) begin
-        if($time % 100 == 0)
-            $display("Time=%0t pwm=%b counter=%0d i=%0d S_in=%b latch=%b", 
-                     $time, pwm, uut.counter, uut.i, uut.S_in, uut.latch);
+        if (uut.count == 0)
+            $display("Time=%0t Active PWM channels: %b", $time, enable_pwm);
     end
+
 endmodule
